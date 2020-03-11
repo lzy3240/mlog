@@ -2,7 +2,7 @@ package mlog
 
 //日志级别判断
 func (l *Logger) enable(loglevel LogLevel) bool {
-	return loglevel >= l.Level
+	return loglevel >= l.level
 }
 
 // Debug ...
