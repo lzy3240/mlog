@@ -8,40 +8,45 @@ import (
 )
 
 //	检查滚动标签
-// 	标签类型："minite"、"hour"、"day"、"month"、"year"、"size"
+// 	标签类型："hour"、"day"、"month"、"year"、"size"
 //	符合切割条件的，备份文件，重置该级别新日志文件句柄
-func (l *Logger) checkTrail(file *os.File, lv LogLevel) {
-	switch l.trailType {
-	case "default":
-	case "minite":
-		if time.Now().Format("05") == "00" {
-			l.trailFile(file, lv)
+func (l *Logger) checkTrail() {
+	if !l.istail {
+		for k, v := range l.fileObjs {
+			switch l.trailType {
+			case "hour":
+				if time.Now().Format("04") == "00" { //0分切换
+					//l.trailFile(file, lv)
+					l.trailFile(v, k)
+				}
+			case "day":
+				if time.Now().Format("15:04") == "00:00" { //0时0分切换
+					l.trailFile(v, k)
+				}
+			case "month":
+				if time.Now().Format("02 15:04") == "01 00:00" { //1日0时0分切换
+					l.trailFile(v, k)
+				}
+			case "year":
+				if time.Now().Format("01-02 15:04") == "01-01 00:00" { //1月1日0时0分切换
+					l.trailFile(v, k)
+				}
+			case "size":
+				fileInfo, err := v.Stat()
+				if err != nil {
+					fmt.Printf("get file info faild.err:%v\n", err)
+					return
+				}
+				if fileInfo.Size() >= l.maxFileSize {
+					l.trailFile(v, k)
+				}
+			}
 		}
-	case "hour":
-		if time.Now().Format("04:05") == "00:00" {
-			l.trailFile(file, lv)
-		}
-	case "day":
-		if time.Now().Format("15:04:05") == "00:00:00" {
-			l.trailFile(file, lv)
-		}
-	case "month":
-		if time.Now().Format("02 15:04:05") == "01 00:00:00" {
-			l.trailFile(file, lv)
-		}
-	case "year":
-		if time.Now().Format("01-02 15:04:05") == "01-01 00:00:00" {
-			l.trailFile(file, lv)
-		}
-	case "size":
-		fileInfo, err := file.Stat()
-		if err != nil {
-			fmt.Printf("get file info faild.err:%v\n", err)
-			return
-		}
-		if fileInfo.Size() >= l.maxFileSize {
-			l.trailFile(file, lv)
-		}
+		l.istail = true
+		time.Sleep(time.Second * 30)
+	} else {
+		l.istail = false
+		time.Sleep(time.Second * 31)
 	}
 }
 

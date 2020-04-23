@@ -35,6 +35,7 @@ type Logger struct {
 	perFix      string
 	trailType   string
 	maxFileSize int64
+	istail      bool
 	fileObjs    map[LogLevel]*os.File
 }
 
@@ -42,8 +43,8 @@ type Logger struct {
 //	lv 级别：DEBUG INFO WARN ERROR FATAL；
 // 	fp 日志文件路径；
 // 	pf 日志文件前缀；
-// 	tt 日志切割类型："default"、"minite"、"hour"、"day"、"month"、"year"、"size";
-//	1、选时间模式时，以每个方式的起始值切割，如：hour,即每小时0分0秒时切割; month,即每月1日0时切割；
+// 	tt 日志切割类型："hour"、"day"、"month"、"year"、"size";
+//	1、选时间模式时，以每个方式的起始值切割，如：hour,即每小时0分时切割; month,即每月1日0时切割；
 //	2、选size时，按文件大小切割，参数值为ms，单位byte;不选size时，ms值不生效，可写0
 func Newlog(lv, fp, pf, tt string, ms int64) *Logger {
 	level, err := parseLogLevel(lv)
@@ -56,11 +57,13 @@ func Newlog(lv, fp, pf, tt string, ms int64) *Logger {
 		perFix:      pf,
 		trailType:   tt,
 		maxFileSize: ms,
+		istail:      false,
 	}
 	err = fl.creatFile() //创建文件
 	if err != nil {
 		panic(err)
 	}
+	go fl.checkTrail()
 	return fl
 }
 
@@ -92,6 +95,7 @@ func (l *Logger) creatFile() error {
 			l.fileObjs[v] = fileObj
 		}
 	}
+
 	//fmt.Println(l.fileObjs)
 	return nil
 }
@@ -153,7 +157,7 @@ func (l *Logger) writeLog(lv LogLevel, format string, args ...interface{}) {
 		funcName, fileName, line := getRunInfo(3)
 		fmt.Printf("[%s] [%s] [%s:%s:%d] %s\n", now.Format("2006-01-02 15:04:05.000"), unparseLogLevel(lv), fileName, funcName, line, msg)
 		//日志文件切割
-		l.checkTrail(l.fileObjs[lv], lv)
+		//l.checkTrail(l.fileObjs[lv], lv)
 		fmt.Fprintf(l.fileObjs[lv], "[%s] [%s] [%s:%s:%d] %s\n", now.Format("2006-01-02 15:04:05.000"), unparseLogLevel(lv), fileName, funcName, line, msg)
 	}
 }
