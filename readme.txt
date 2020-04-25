@@ -10,3 +10,34 @@ Cut log by configuration
 //  2、选size模式时，值以MB为单位
 //  3、异步写入磁盘
 //  4、输出到控制台
+
+
+package main
+
+import (
+	"time"
+
+	"github.com/lzy3240/mlog"
+)
+
+var log *mlog.Logger
+
+// init log
+func init() {
+	log = mlog.Newlog("info", "./logs/", "Test", "hour=1")
+	// log = mlog.Newlog("error", "./logs/", "Test", "hour=3")
+	// log = mlog.Newlog("info", "./logs/", "Test", "day=1")
+	// log = mlog.Newlog("info", "./logs/", "Test", "size=100")
+}
+
+func main() {
+	a := "just a test msg"
+	for {
+		log.Info("this is a info test,%v", a)
+		log.Debug("this is a Debug test,%v", a)
+		log.Fatal("this is a Fatal test,%v", a)
+		log.Error("this is a Error test,%v", a)
+		log.Warn("this is a Warn test,%v", a)
+		time.Sleep(time.Second)
+	}
+}
