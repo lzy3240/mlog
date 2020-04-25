@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,40 +31,64 @@ type Lever struct {
 
 // Logger 结构体
 type Logger struct {
-	level       LogLevel
-	filePath    string
-	perFix      string
-	trailType   string
-	maxFileSize int64
-	istail      bool
-	fileObjs    map[LogLevel]*os.File
+	level     LogLevel
+	filePath  string
+	perFix    string
+	trailType string
+	trailTag  time.Time
+	trailCap  int64
+	fileObj   *os.File
+	logChan   chan *logMsg //
+}
+
+// logMsg 结构体 //
+type logMsg struct {
+	level    LogLevel
+	msg      string
+	funcName string
+	fileName string
+	timeStmp string
+	line     int
 }
 
 // Newlog 构造函数
 //	lv 级别：DEBUG INFO WARN ERROR FATAL；
 // 	fp 日志文件路径；
 // 	pf 日志文件前缀；
-// 	tt 日志切割类型："hour"、"day"、"month"、"year"、"size";
-//	1、选时间模式时，以每个方式的起始值切割，如：hour,即每小时0分时切割; month,即每月1日0时切割；
-//	2、选size时，按文件大小切割，参数值为ms，单位byte;不选size时，ms值不生效，可写0
-func Newlog(lv, fp, pf, tt string, ms int64) *Logger {
+// 	ts 日志切割类型及参数："minite=10"、"hour=2"、"day=1"、"size=1024";
+//	1、选时间模式时，以每个方式的起始值切割，如：hour,即每小时0分时切割; day,即每日0时切割；
+//  2、选size模式时，值以MB为单位
+func Newlog(lv, fp, pf, ts string) *Logger {
 	level, err := parseLogLevel(lv)
 	if err != nil {
 		panic(err)
 	}
-	fl := &Logger{
-		level:       level,
-		filePath:    fp,
-		perFix:      pf,
-		trailType:   tt,
-		maxFileSize: ms,
-		istail:      false,
-	}
-	err = fl.creatFile() //创建文件
+	tt, ms, err := parseTrailAttr(ts)
 	if err != nil {
 		panic(err)
 	}
-	go fl.checkTrail()
+	if ms <= 0 {
+		err = errors.New("cut interval attribute must bigger than 0")
+		panic(err)
+	}
+	fl := &Logger{
+		level:     level,
+		filePath:  fp,
+		perFix:    pf,
+		trailType: tt,
+		trailCap:  ms,
+		logChan:   make(chan *logMsg, 50000),
+	}
+	//初始化滚动标签
+	err = fl.initTag()
+	if err != nil {
+		panic(err)
+	}
+	//初始化文件句柄
+	err = fl.creatFile()
+	if err != nil {
+		panic(err)
+	}
 	return fl
 }
 
@@ -80,23 +105,18 @@ func (l *Logger) creatFile() error {
 			fmt.Printf("create file path faild. err:%v\n", err)
 		}
 	}
-	//判断日志级别，生成高于该级别的日志句柄
-	var tmp = [5]LogLevel{DEBUG, INFO, WARN, ERROR, FATAL}
-	l.fileObjs = make(map[LogLevel]*os.File, 5)
-	for _, v := range tmp {
-		if v >= l.level {
-			fileName := l.perFix + unparseLogLevel(v) + ".log"
-			fullFileName := path.Join(l.filePath, fileName)
-			fileObj, err := os.OpenFile(fullFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				fmt.Printf("open log file faild. err:%v\n", err)
-				return err
-			}
-			l.fileObjs[v] = fileObj
-		}
-	}
 
-	//fmt.Println(l.fileObjs)
+	fileName := l.perFix + ".log"
+	fullFileName := path.Join(l.filePath, fileName)
+	fobj, err := os.OpenFile(fullFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Printf("open log file faild. err:%v\n", err)
+		return err
+	}
+	l.fileObj = fobj
+	//开启1个后台goroutine落盘
+	go l.writeBackGround()
+
 	return nil
 }
 
@@ -110,6 +130,14 @@ func isExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// 格式化日志切割参数
+func parseTrailAttr(str string) (tt string, tc int64, err error) {
+	tmpStr := strings.Split(str, "=")
+	tt = tmpStr[0]
+	tc, err = strconv.ParseInt(tmpStr[1], 10, 64)
+	return
 }
 
 // 格式化日志级别
@@ -127,7 +155,7 @@ func parseLogLevel(s string) (LogLevel, error) {
 	case "fatal":
 		return FATAL, nil
 	default:
-		err := errors.New("未知的日志级别")
+		err := errors.New("unknown log level")
 		return DEBUG, err
 	}
 }
@@ -149,16 +177,42 @@ func unparseLogLevel(lv LogLevel) string {
 	return "DEBUG"
 }
 
+// 后台从通道取出落盘
+func (l *Logger) writeBackGround() {
+	for {
+		//日志文件切割
+		l.checkTrail()
+		select {
+		case logTmp := <-l.logChan:
+			logInfo := fmt.Sprintf("[%s] [%s] [%s:%s:%d] %s\n", logTmp.timeStmp, unparseLogLevel(logTmp.level), logTmp.fileName, logTmp.funcName, logTmp.line, logTmp.msg)
+			fmt.Printf(logInfo)
+			fmt.Fprintf(l.fileObj, logInfo)
+		default:
+			time.Sleep(time.Millisecond * 10)
+		}
+	}
+}
+
 // 按格式写日志，切割日志文件
 func (l *Logger) writeLog(lv LogLevel, format string, args ...interface{}) {
 	if l.enable(lv) {
 		msg := fmt.Sprintf(format, args...) //拼接接口类变量
 		now := time.Now()
 		funcName, fileName, line := getRunInfo(3)
-		fmt.Printf("[%s] [%s] [%s:%s:%d] %s\n", now.Format("2006-01-02 15:04:05.000"), unparseLogLevel(lv), fileName, funcName, line, msg)
-		//日志文件切割
-		//l.checkTrail(l.fileObjs[lv], lv)
-		fmt.Fprintf(l.fileObjs[lv], "[%s] [%s] [%s:%s:%d] %s\n", now.Format("2006-01-02 15:04:05.000"), unparseLogLevel(lv), fileName, funcName, line, msg)
+		//构造日志信息结构体
+		logTmp := &logMsg{
+			level:    lv,
+			msg:      msg,
+			funcName: funcName,
+			fileName: fileName,
+			timeStmp: now.Format("2006-01-02 15:04:05.000"),
+			line:     line,
+		}
+		//发送到通道
+		select {
+		case l.logChan <- logTmp:
+		default:
+		}
 	}
 }
 
@@ -169,13 +223,12 @@ func getRunInfo(skip int) (funcName, fileName string, line int) {
 		fmt.Printf("runtime.Caller() faild.\n")
 		return
 	}
-	//funcName = runtime.FuncForPC(pc).Name()
 	funcName = strings.Split(runtime.FuncForPC(pc).Name(), ".")[1] //返回主调用函数名
 	fileName = path.Base(file)                                     //返回主调用文件名
 	return
 }
 
 // CloseFile 关闭文件句柄，内部不使用
-func (l *Logger) CloseFile(file *os.File) {
+func (l *Logger) closeFile(file *os.File) {
 	file.Close()
 }
